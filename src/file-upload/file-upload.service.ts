@@ -1,6 +1,10 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { v2 as cloudinary } from 'cloudinary';
+import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
 import * as fs from 'fs';
 
 @Injectable()
@@ -12,8 +16,7 @@ export class FileUploadService {
       api_secret: process.env.CLOUDINARY_CLOUDE_SECRET,
     });
   }
-
-  async uploadFile(file: Express.Multer.File) {
+  async uploadFile(file: Express.Multer.File, userId: number) {
     try {
       const uploadResult = await this.uploadToCloudinary(file.path);
       const newlySavedFile = await this.prisma.file.create({
@@ -21,8 +24,11 @@ export class FileUploadService {
           filename: file.originalname,
           publicId: uploadResult.public_id,
           url: uploadResult.secure_url,
+          userId,
         },
       });
+      fs.unlinkSync(file.path);
+      return newlySavedFile;
     } catch (error) {
       console.log(error);
       if (file.path && fs.existsSync(file.path)) {
@@ -34,12 +40,37 @@ export class FileUploadService {
     }
   }
 
-  private uploadToCloudinary(filePath: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      cloudinary.uploader.upload(filePath, (err, result) => {
-        if (err) return reject(err);
-        resolve(result);
+  private async uploadToCloudinary(
+    filePath: string,
+  ): Promise<UploadApiResponse> {
+    return cloudinary.uploader.upload(filePath);
+  }
+
+  async deleteFile(fileId: number, userId: number) {
+    try {
+      const file = await this.prisma.file.findUnique({
+        where: {
+          id: fileId,
+          userId,
+        },
       });
-    });
+      if (!file) {
+        throw new NotFoundException('File not found');
+      }
+      await cloudinary.uploader.destroy(file.publicId);
+      await this.prisma.file.delete({
+        where: {
+          id: fileId,
+          userId,
+        },
+      });
+      return {
+        message: 'File Deleted successfully',
+      };
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `File upload filed Please try again after some time`,
+      );
+    }
   }
 }
